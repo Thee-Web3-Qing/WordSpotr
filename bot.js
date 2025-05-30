@@ -5,6 +5,7 @@ const tokenizer = new natural.WordTokenizer();
 const stemmer = natural.PorterStemmer;
 const axios = require('axios');
 const fuzz = require('fuzzball');
+const express = require('express'); // Added for Render port binding
 
 console.log("🚀 Starting WordSpotr bot...");
 
@@ -330,7 +331,7 @@ bot.onText(/\/checktoken(?:\s+([\s\S]+))?/, async (msg, match) => {
         reply_markup: {
           inline_keyboard: [[
             { text: '💡 See Examples', callback_data: 'show_search_examples' },
-            { text: '◀️ Main Menu', callback_data: 'menu_main' }
+            { text: '◶ Main Menu', callback_data: 'menu_main' }
           ]]
         }
       }
@@ -408,7 +409,7 @@ bot.onText(/\/checktoken(?:\s+([\s\S]+))?/, async (msg, match) => {
           reply_markup: {
             inline_keyboard: [[
               { text: '🔍 Try Again', callback_data: 'menu_search' },
-              { text: '◀️ Main Menu', callback_data: 'menu_main' }
+              { text: '◶ Main Menu', callback_data: 'menu_main' }
             ]]
           }
         }
@@ -523,7 +524,7 @@ async function sendTokenPage(chatId, pairs, page, searchQuery) {
   if (page < totalPages) {
     paginationButtons.push({ text: 'Next ▶️', callback_data: `page_${page + 1}` });
   }
-  paginationButtons.push({ text: '◀️ Main Menu', callback_data: 'menu_main' });
+  paginationButtons.push({ text: '◶ Main Menu', callback_data: 'menu_main' });
 
   if (paginationButtons.length > 1) {
     const paginationMsg = await bot.sendMessage(chatId, `📄 *Page ${page}/${totalPages}*`, {
@@ -1034,18 +1035,18 @@ bot.onText(/\/mysavedwords/, (msg) => {
     );
   } else {
     bot.sendMessage(
-        chatId, 
-        {
-          text: '📝 *Your Saved Words*\n\n❌ No words saved yet.*\n\nUse `/saveword <word1> to save up to 5 words for launch alerts.',
-          parse_mode: 'MarkdownV2',
-          reply_markup: {
-            inline_keyboard: [[
-              { text: '💾 Save Words Now', callback_data: 'save_words_help' },
-              { text: '◶ Main Menu', callback_data: 'menu_main' }
-            ]]
-          }
+      chatId, 
+      {
+        text: '📝 *Your Saved Words*\n\n❌ No words saved yet.*\n\nUse `/saveword <word1> to save up to 5 words for launch alerts.',
+        parse_mode: 'MarkdownV2',
+        reply_markup: {
+          inline_keyboard: [[
+            { text: '💾 Save Words Now', callback_data: 'save_words_help' },
+            { text: '◶ Main Menu', callback_data: 'menu_main' }
+          ]]
         }
-      );
+      }
+    );
   }
 });
 
@@ -1071,8 +1072,8 @@ bot.onText(/\/clearsavedwords/, (msg) => {
           { text: '❌ Cancel', callback_data: 'menu_main' }
         ]]
       }
-      }
-    );
+    }
+  );
 });
 
 // Enhanced token alert system
@@ -1159,7 +1160,6 @@ async function checkForTokenAlerts() {
 
 // Enhanced utility functions
 function passesNumericFilter(pairValue, filter) {
-  
   if (!pairValue) return false;
   
   if (typeof filter === 'object') {
@@ -1182,6 +1182,20 @@ bot.on('polling_error', (error) => {
 
 bot.on('error', (error) => {
   console.error('Bot error:', error);
+});
+
+// Add Express server to bind to a port for Render
+const app = express();
+
+// Basic route to confirm the server is running
+app.get('/', (req, res) => {
+  res.status(200).send('WordSpotr Bot is running!');
+});
+
+// Bind to the port provided by Render (or default to 3000 for local development)
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
 });
 
 // Start the alert checking system
