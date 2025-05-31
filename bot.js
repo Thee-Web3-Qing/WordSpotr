@@ -5,15 +5,118 @@ const tokenizer = new natural.WordTokenizer();
 const stemmer = natural.PorterStemmer;
 const axios = require('axios');
 const fuzz = require('fuzzball');
+const fs = require('fs');
+const path = require('path');
+const NodeCache = require('node-cache');
 
-console.log("🚀 Starting WordSpotr bot...");
+console.log("�� Starting WordSpotr bot...");
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const bot = new TelegramBot(token, { polling: true });
 
-const userFilters = {};
-const userSavedWords = {};
-const notifiedTokens = {};
+// File paths for persistent storage
+const DATA_DIR = path.join(__dirname, 'data');
+const USER_FILTERS_FILE = path.join(DATA_DIR, 'user_filters.json');
+const USER_WORDS_FILE = path.join(DATA_DIR, 'user_words.json');
+const NOTIFIED_TOKENS_FILE = path.join(DATA_DIR, 'notified_tokens.json');
+
+// Create data directory if it doesn't exist
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR);
+}
+
+// Export current in-memory data if files don't exist
+if (!fs.existsSync(USER_FILTERS_FILE) || !fs.existsSync(USER_WORDS_FILE)) {
+  console.log("📦 Exporting current data to files...");
+  try {
+    // Save to files
+    fs.writeFileSync(USER_FILTERS_FILE, JSON.stringify(global.userFilters, null, 2));
+    fs.writeFileSync(USER_WORDS_FILE, JSON.stringify(global.userSavedWords, null, 2));
+    fs.writeFileSync(NOTIFIED_TOKENS_FILE, JSON.stringify(global.notifiedTokens, null, 2));
+    
+    console.log("✅ Data exported successfully!");
+  } catch (error) {
+    console.error("❌ Error exporting data:", error);
+  }
+}
+
+// Load existing data
+try {
+  if (fs.existsSync(USER_FILTERS_FILE)) {
+    global.userFilters = JSON.parse(fs.readFileSync(USER_FILTERS_FILE, 'utf8'));
+  }
+  if (fs.existsSync(USER_WORDS_FILE)) {
+    global.userSavedWords = JSON.parse(fs.readFileSync(USER_WORDS_FILE, 'utf8'));
+  }
+  if (fs.existsSync(NOTIFIED_TOKENS_FILE)) {
+    global.notifiedTokens = JSON.parse(fs.readFileSync(NOTIFIED_TOKENS_FILE, 'utf8'));
+  }
+} catch (error) {
+  console.error('Error loading data files:', error);
+}
+
+// Add debounced save function
+let saveTimeout = null;
+function debouncedSave() {
+  if (saveTimeout) {
+    clearTimeout(saveTimeout);
+  }
+  saveTimeout = setTimeout(() => {
+    saveData();
+  }, 5000); // Wait 5 seconds after last change before saving
+}
+
+// Optimize saveData function
+function saveData() {
+  try {
+    // Only save if there are changes
+    const currentFilters = JSON.stringify(global.userFilters);
+    const currentWords = JSON.stringify(global.userSavedWords);
+    const currentTokens = JSON.stringify(global.notifiedTokens);
+
+    // Read existing data
+    let existingFilters = '{}';
+    let existingWords = '{}';
+    let existingTokens = '{}';
+
+    try {
+      if (fs.existsSync(USER_FILTERS_FILE)) {
+        existingFilters = fs.readFileSync(USER_FILTERS_FILE, 'utf8');
+      }
+      if (fs.existsSync(USER_WORDS_FILE)) {
+        existingWords = fs.readFileSync(USER_WORDS_FILE, 'utf8');
+      }
+      if (fs.existsSync(NOTIFIED_TOKENS_FILE)) {
+        existingTokens = fs.readFileSync(NOTIFIED_TOKENS_FILE, 'utf8');
+      }
+    } catch (error) {
+      console.error('Error reading existing data:', error);
+    }
+
+    // Only write if data has changed
+    if (currentFilters !== existingFilters) {
+      fs.writeFileSync(USER_FILTERS_FILE, currentFilters);
+    }
+    if (currentWords !== existingWords) {
+      fs.writeFileSync(USER_WORDS_FILE, currentWords);
+    }
+    if (currentTokens !== existingTokens) {
+      fs.writeFileSync(NOTIFIED_TOKENS_FILE, currentTokens);
+    }
+  } catch (error) {
+    console.error('Error saving data files:', error);
+  }
+}
+
+// Save data every 5 minutes
+setInterval(saveData, 300000);
+
+// Save data on process exit
+process.on('SIGINT', () => {
+  saveData();
+  process.exit();
+});
+
 const TOKENS_PER_PAGE = 5;
 
 // Utility function to escape MarkdownV2 special characters
@@ -246,7 +349,8 @@ bot.setMyCommands([
   { command: 'mysavedwords', description: '📝 View saved words' },
   { command: 'clearsavedwords', description: '🗑️ Clear all saved words' },
   { command: 'mystats', description: '📊 View your statistics' },
-  { command: 'help', description: '📚 Detailed help guide' }
+  { command: 'help', description: '📚 Detailed help guide' },
+  { command: 'adminstats', description: '👑 Admin: View bot statistics' }
 ]);
 
 // Enhanced command handlers
@@ -275,8 +379,8 @@ bot.onText(/\/help/, (msg) => {
 
 bot.onText(/\/mystats/, (msg) => {
   const chatId = msg.chat.id;
-  const filters = userFilters[chatId]?.filters || {};
-  const savedWords = userSavedWords[chatId] || [];
+  const filters = global.userFilters[chatId]?.filters || {};
+  const savedWords = global.userSavedWords[chatId] || [];
   
   const statsMessage = `📊 *Your WordSpotr Statistics*
 
@@ -288,9 +392,9 @@ bot.onText(/\/mystats/, (msg) => {
 🚨 *Alert Status:* ${savedWords.length > 0 ? '✅ Active' : '❌ Inactive'}
 
 *Recent Activity:*
-• Last search: ${escapeMarkdownV2(userFilters[chatId]?.lastSearch || 'Never')}
-• Tokens found today: ${userFilters[chatId]?.tokensFoundToday || 0}
-• Alerts received: ${userFilters[chatId]?.alertsReceived || 0}
+• Last search: ${escapeMarkdownV2(global.userFilters[chatId]?.lastSearch || 'Never')}
+• Tokens found today: ${global.userFilters[chatId]?.tokensFoundToday || 0}
+• Alerts received: ${global.userFilters[chatId]?.alertsReceived || 0}
 
 _Keep searching to discover more gems\\!_ 💎`;
 
@@ -302,11 +406,11 @@ _Keep searching to discover more gems\\!_ 💎`;
 
 bot.onText(/\/checkfilter/, (msg) => {
   const chatId = msg.chat.id;
-  userFilters[chatId] = userFilters[chatId] || { filters: {} };
-  userFilters[chatId].awaitingFilterKey = null;
+  global.userFilters[chatId] = global.userFilters[chatId] || { filters: {} };
+  global.userFilters[chatId].awaitingFilterKey = null;
 
-  const filterButtons = getFilterButtons(userFilters[chatId].filters || {});
-  const hasFilters = Object.keys(userFilters[chatId].filters || {}).length > 0;
+  const filterButtons = getFilterButtons(global.userFilters[chatId].filters || {});
+  const hasFilters = Object.keys(global.userFilters[chatId].filters || {}).length > 0;
 
   bot.sendMessage(chatId,
     `⚙️ *Configure Your Trading Filters*\n\n${hasFilters ? 'Current filters are applied to all searches\\.' : 'No filters set\\. Set filters to refine your token searches\\.'}\n\n*Tap a filter to configure:*`,
@@ -317,11 +421,51 @@ bot.onText(/\/checkfilter/, (msg) => {
   );
 });
 
-// Enhanced token search with pagination
+// Add after other constants
+const searchCache = new NodeCache({ stdTTL: 300 }); // Cache for 5 minutes
+const RATE_LIMIT = new Map(); // Rate limiting map
+const RATE_LIMIT_WINDOW = 60000; // 1 minute window
+const MAX_REQUESTS_PER_WINDOW = 30; // Max requests per minute
+
+// Add rate limiting function
+function checkRateLimit(chatId) {
+  const now = Date.now();
+  const userRequests = RATE_LIMIT.get(chatId) || [];
+  
+  // Remove old requests
+  const recentRequests = userRequests.filter(time => now - time < RATE_LIMIT_WINDOW);
+  
+  if (recentRequests.length >= MAX_REQUESTS_PER_WINDOW) {
+    return false;
+  }
+  
+  recentRequests.push(now);
+  RATE_LIMIT.set(chatId, recentRequests);
+  return true;
+}
+
+// Optimize token search
 bot.onText(/\/checktoken(?:\s+([\s\S]+))?/, async (msg, match) => {
   const chatId = msg.chat.id;
   const input = match[1] ? match[1].trim() : '';
   
+  // Check rate limit
+  if (!checkRateLimit(chatId)) {
+    bot.sendMessage(chatId, 
+      `⚠️ *Rate Limit Exceeded*\n\nPlease wait a minute before making more requests\\.`, 
+      { parse_mode: 'MarkdownV2' }
+    );
+    return;
+  }
+
+  // Check cache first
+  const cacheKey = `search_${input}`;
+  const cachedResults = searchCache.get(cacheKey);
+  if (cachedResults) {
+    await sendTokenPage(chatId, cachedResults, 1, input);
+    return;
+  }
+
   if (!input) {
     bot.sendMessage(chatId, 
       `🔍 *Token Search*\n\nPlease add your search phrase after the command\\.\n\n*Example:*\n\`/checktoken nothing will be forgiven\`\n\`/checktoken moon rocket doge\``, 
@@ -365,8 +509,8 @@ bot.onText(/\/checktoken(?:\s+([\s\S]+))?/, async (msg, match) => {
       }
     });
 
-    if (Object.keys(filters).length === 0 && userFilters[chatId] && userFilters[chatId].filters) {
-      filters = userFilters[chatId].filters;
+    if (Object.keys(filters).length === 0 && global.userFilters[chatId] && global.userFilters[chatId].filters) {
+      filters = global.userFilters[chatId].filters;
     }
 
     const tokens = tokenizer.tokenize(sentence);
@@ -448,15 +592,20 @@ bot.onText(/\/checktoken(?:\s+([\s\S]+))?/, async (msg, match) => {
     }
 
     // Store results for pagination
-    userFilters[chatId] = userFilters[chatId] || {};
-    userFilters[chatId].lastTokenPairs = filteredPairs;
-    userFilters[chatId].lastSearch = input;
-    userFilters[chatId].tokensFoundToday = (userFilters[chatId].tokensFoundToday || 0) + filteredPairs.length;
-    userFilters[chatId].currentPage = 1;
-    userFilters[chatId].pageMessageIds = []; // Initialize array to track page message IDs
+    global.userFilters[chatId] = global.userFilters[chatId] || {};
+    global.userFilters[chatId].lastTokenPairs = filteredPairs;
+    global.userFilters[chatId].lastSearch = input;
+    global.userFilters[chatId].tokensFoundToday = (global.userFilters[chatId].tokensFoundToday || 0) + filteredPairs.length;
+    global.userFilters[chatId].currentPage = 1;
+    global.userFilters[chatId].pageMessageIds = []; // Initialize array to track page message IDs
 
     // Send first page of results
     await sendTokenPage(chatId, filteredPairs, 1, input);
+
+    // After getting results, cache them:
+    if (filteredPairs.length > 0) {
+      searchCache.set(cacheKey, filteredPairs);
+    }
 
   } catch (error) {
     console.error('Search Error:', error);
@@ -536,8 +685,57 @@ async function sendTokenPage(chatId, pairs, page, searchQuery) {
   }
 
   // Store message IDs for the current page
-  userFilters[chatId].pageMessageIds = messageIds;
+  global.userFilters[chatId].pageMessageIds = messageIds;
 }
+
+// Add admin stats command handler
+bot.onText(/\/adminstats/, (msg) => {
+  const chatId = msg.chat.id;
+  
+  // Check if user is admin
+  if (chatId !== 5844734533) {
+    bot.sendMessage(chatId, '❌ *Unauthorized*\n\nThis command is only available to administrators.', {
+      parse_mode: 'MarkdownV2'
+    });
+    return;
+  }
+
+  // Calculate statistics
+  const uniqueUsers = new Set([
+    ...Object.keys(global.userFilters),
+    ...Object.keys(global.userSavedWords)
+  ]);
+
+  const totalUsers = uniqueUsers.size;
+  const usersWithFilters = Object.keys(global.userFilters).length;
+  const usersWithWords = Object.keys(global.userSavedWords).length;
+  const totalSavedWords = Object.values(global.userSavedWords).reduce((sum, words) => sum + (words?.length || 0), 0);
+  const totalSearchesToday = Object.values(global.userFilters).reduce((sum, user) => sum + (user?.tokensFoundToday || 0), 0);
+  const totalAlertsSent = Object.values(global.userFilters).reduce((sum, user) => sum + (user?.alertsReceived || 0), 0);
+
+  const statsMessage = `👑 *WordSpotr Admin Statistics*
+
+👥 *User Statistics:*
+• Total Unique Users: ${totalUsers}
+• Users with Filters: ${usersWithFilters}
+• Users with Saved Words: ${usersWithWords}
+
+📊 *Activity Statistics:*
+• Total Saved Words: ${totalSavedWords}
+• Tokens Found Today: ${totalSearchesToday}
+• Total Alerts Sent: ${totalAlertsSent}
+
+_Last updated: ${new Date().toLocaleString()}_`;
+
+  bot.sendMessage(chatId, statsMessage, {
+    parse_mode: 'MarkdownV2',
+    reply_markup: {
+      inline_keyboard: [[
+        { text: '🔄 Refresh Stats', callback_data: 'refresh_admin_stats' }
+      ]]
+    }
+  });
+});
 
 // Enhanced callback query handler with pagination
 bot.on('callback_query', async (callbackQuery) => {
@@ -551,7 +749,7 @@ bot.on('callback_query', async (callbackQuery) => {
   // Handle pagination
   if (data.startsWith('page_')) {
     const page = parseInt(data.split('_')[1]);
-    const pairs = userFilters[chatId]?.lastTokenPairs || [];
+    const pairs = global.userFilters[chatId]?.lastTokenPairs || [];
     
     if (pairs.length === 0) {
       bot.editMessageText('❌ *No Results Available*\n\nPlease perform a new search using /checktoken', {
@@ -569,7 +767,7 @@ bot.on('callback_query', async (callbackQuery) => {
     }
 
     // Delete all messages from the current page
-    const messageIds = userFilters[chatId]?.pageMessageIds || [];
+    const messageIds = global.userFilters[chatId]?.pageMessageIds || [];
     for (const msgId of messageIds) {
       try {
         await bot.deleteMessage(chatId, msgId);
@@ -578,8 +776,8 @@ bot.on('callback_query', async (callbackQuery) => {
       }
     }
 
-    userFilters[chatId].currentPage = page;
-    await sendTokenPage(chatId, pairs, page, userFilters[chatId]?.lastSearch || 'your query');
+    global.userFilters[chatId].currentPage = page;
+    await sendTokenPage(chatId, pairs, page, global.userFilters[chatId]?.lastSearch || 'your query');
     return;
   }
 
@@ -609,8 +807,8 @@ bot.on('callback_query', async (callbackQuery) => {
   }
 
   if (data === 'menu_filters') {
-    userFilters[chatId] = userFilters[chatId] || { filters: {} };
-    const filterButtons = getFilterButtons(userFilters[chatId].filters || {});
+    global.userFilters[chatId] = global.userFilters[chatId] || { filters: {} };
+    const filterButtons = getFilterButtons(global.userFilters[chatId].filters || {});
     bot.editMessageText('⚙️ *Configure Trading Filters*\n\nSet your preferences to refine token searches:', {
       chat_id: chatId,
       message_id: messageId,
@@ -639,7 +837,7 @@ bot.on('callback_query', async (callbackQuery) => {
     const filterKey = data.replace('set_filter_', '');
     
     if (filterKey === 'done') {
-      const filters = userFilters[chatId].filters || {};
+      const filters = global.userFilters[chatId].filters || {};
       let summary = '✅ *Filters Configured*\n\n';
       
       if (Object.keys(filters).length === 0) {
@@ -689,7 +887,7 @@ bot.on('callback_query', async (callbackQuery) => {
     }
     
     if (filterKey === 'back') {
-      const filterButtons = getFilterButtons(userFilters[chatId].filters || {});
+      const filterButtons = getFilterButtons(global.userFilters[chatId].filters || {});
       bot.editMessageText('⚙️ *Configure Trading Filters*\n\nSet your preferences to refine token searches:', {
         chat_id: chatId,
         message_id: messageId,
@@ -702,10 +900,10 @@ bot.on('callback_query', async (callbackQuery) => {
 
   if (data.startsWith('choose_chain_')) {
     const chain = data.replace('choose_chain_', '');
-    userFilters[chatId].filters = userFilters[chatId].filters || {};
-    userFilters[chatId].filters.blockchain = chain;
+    global.userFilters[chatId].filters = global.userFilters[chatId].filters || {};
+    global.userFilters[chatId].filters.blockchain = chain;
     
-    const filterButtons = getFilterButtons(userFilters[chatId].filters);
+    const filterButtons = getFilterButtons(global.userFilters[chatId].filters);
     bot.editMessageText(`✅ *Blockchain Set*\n\nSelected: ${escapeMarkdownV2(chain)}\n\nConfigure more filters or tap Done:`, {
       chat_id: chatId,
       message_id: messageId,
@@ -717,10 +915,10 @@ bot.on('callback_query', async (callbackQuery) => {
 
   if (data.startsWith('numfilter_')) {
     const [, filterKey, op, valueOrCustom] = data.split('_');
-    userFilters[chatId].filters = userFilters[chatId].filters || {};
+    global.userFilters[chatId].filters = global.userFilters[chatId].filters || {};
     
     if (op === 'custom') {
-      userFilters[chatId].awaitingCustomRange = filterKey;
+      global.userFilters[chatId].awaitingCustomRange = filterKey;
       bot.editMessageText(`🎯 *Custom Range for ${escapeMarkdownV2(filterKey.replace(/([A-Z])/g, ' $1'))}*\n\nSend a message with format:\n\`min 10000 max 50000\``, {
         chat_id: chatId,
         message_id: messageId,
@@ -733,12 +931,13 @@ bot.on('callback_query', async (callbackQuery) => {
       });
       return;
     } else {
-      userFilters[chatId].filters[filterKey] = { 
+      global.userFilters[chatId].filters[filterKey] = { 
         op: op === 'gt' ? '>' : '<', 
         value: parseFloat(valueOrCustom) 
       };
+      debouncedSave(); // Save after modifying filters
       
-      const filterButtons = getFilterButtons(userFilters[chatId].filters);
+      const filterButtons = getFilterButtons(global.userFilters[chatId].filters);
       const displayName = filterKey.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase());
       bot.editMessageText(`✅ *Filter Set*\n\n${escapeMarkdownV2(displayName)}: ${op === 'gt' ? '>' : '<'}$${formatNumber(parseFloat(valueOrCustom))}\n\nConfigure more or tap Done:`, {
         chat_id: chatId,
@@ -751,7 +950,8 @@ bot.on('callback_query', async (callbackQuery) => {
   }
 
   if (data === 'clear_all_filters') {
-    userFilters[chatId].filters = {};
+    global.userFilters[chatId].filters = {};
+    debouncedSave(); // Save after clearing filters
     const filterButtons = getFilterButtons({});
     bot.editMessageText('🗑️ *All Filters Cleared*\n\nYour filters have been reset\\. Configure new ones:', {
       chat_id: chatId,
@@ -763,7 +963,7 @@ bot.on('callback_query', async (callbackQuery) => {
   }
 
   if (data === 'view_saved_words') {
-    const words = userSavedWords[chatId] || [];
+    const words = global.userSavedWords[chatId] || [];
     if (words.length > 0) {
       bot.editMessageText(
         `📝 *Your Saved Words*\n\n${words.map((w, i) => `${i + 1}\\. \`${escapeMarkdownV2(w)}\``).join('\n')}\n\n*Status:* 🟢 Active alerts\n*Slots used:* ${words.length}/5`, 
@@ -818,7 +1018,7 @@ bot.on('callback_query', async (callbackQuery) => {
   }
 
   if (data === 'clear_saved_words') {
-    const words = userSavedWords[chatId] || [];
+    const words = global.userSavedWords[chatId] || [];
     if (words.length === 0) {
       bot.editMessageText(
         `🗑️ *Clear Saved Words*\n\nYou don't have any saved words to clear\\.`, 
@@ -853,7 +1053,8 @@ bot.on('callback_query', async (callbackQuery) => {
   }
 
   if (data === 'confirm_clear_words') {
-    userSavedWords[chatId] = [];
+    global.userSavedWords[chatId] = [];
+    debouncedSave(); // Save after clearing words
     bot.editMessageText(
       `✅ *Words Cleared*\n\nAll your saved words have been removed\\.\n\nYou can add new words anytime with \`/saveword\`\\.`, 
       {
@@ -893,8 +1094,8 @@ bot.on('callback_query', async (callbackQuery) => {
   }
 
   if (data === 'menu_stats') {
-    const filters = userFilters[chatId]?.filters || {};
-    const savedWords = userSavedWords[chatId] || [];
+    const filters = global.userFilters[chatId]?.filters || {};
+    const savedWords = global.userSavedWords[chatId] || [];
     const statsMessage = `📊 *Your WordSpotr Statistics*
 
 👤 *User:* ${escapeMarkdownV2(callbackQuery.from.first_name)}
@@ -905,9 +1106,9 @@ bot.on('callback_query', async (callbackQuery) => {
 🚨 *Alert Status:* ${savedWords.length > 0 ? '✅ Active' : '❌ Inactive'}
 
 *Recent Activity:*
-• Last search: ${escapeMarkdownV2(userFilters[chatId]?.lastSearch || 'Never')}
-• Tokens found today: ${userFilters[chatId]?.tokensFoundToday || 0}
-• Alerts received: ${userFilters[chatId]?.alertsReceived || 0}
+• Last search: ${escapeMarkdownV2(global.userFilters[chatId]?.lastSearch || 'Never')}
+• Tokens found today: ${global.userFilters[chatId]?.tokensFoundToday || 0}
+• Alerts received: ${global.userFilters[chatId]?.alertsReceived || 0}
 
 _Keep searching to discover more gems\\!_ 💎`;
 
@@ -919,6 +1120,56 @@ _Keep searching to discover more gems\\!_ 💎`;
     });
     return;
   }
+
+  if (data === 'refresh_admin_stats') {
+    // Check if user is admin
+    if (chatId !== 5844734533) { // Admin chat ID
+      bot.answerCallbackQuery(callbackQuery.id, {
+        text: 'Unauthorized',
+        show_alert: true
+      });
+      return;
+    }
+
+    // Recalculate statistics
+    const uniqueUsers = new Set([
+      ...Object.keys(global.userFilters),
+      ...Object.keys(global.userSavedWords)
+    ]);
+
+    const totalUsers = uniqueUsers.size;
+    const usersWithFilters = Object.keys(global.userFilters).length;
+    const usersWithWords = Object.keys(global.userSavedWords).length;
+    const totalSavedWords = Object.values(global.userSavedWords).reduce((sum, words) => sum + (words?.length || 0), 0);
+    const totalSearchesToday = Object.values(global.userFilters).reduce((sum, user) => sum + (user?.tokensFoundToday || 0), 0);
+    const totalAlertsSent = Object.values(global.userFilters).reduce((sum, user) => sum + (user?.alertsReceived || 0), 0);
+
+    const statsMessage = `👑 *WordSpotr Admin Statistics*
+
+👥 *User Statistics:*
+• Total Unique Users: ${totalUsers}
+• Users with Filters: ${usersWithFilters}
+• Users with Saved Words: ${usersWithWords}
+
+📊 *Activity Statistics:*
+• Total Saved Words: ${totalSavedWords}
+• Tokens Found Today: ${totalSearchesToday}
+• Total Alerts Sent: ${totalAlertsSent}
+
+_Last updated: ${new Date().toLocaleString()}_`;
+
+    bot.editMessageText(statsMessage, {
+      chat_id: chatId,
+      message_id: messageId,
+      parse_mode: 'MarkdownV2',
+      reply_markup: {
+        inline_keyboard: [[
+          { text: '🔄 Refresh Stats', callback_data: 'refresh_admin_stats' }
+        ]]
+      }
+    });
+    return;
+  }
 });
 
 // Enhanced message handling for filter inputs
@@ -926,21 +1177,21 @@ bot.on('message', (msg) => {
   const chatId = msg.chat.id;
   
   if (
-    userFilters[chatId] &&
-    userFilters[chatId].awaitingCustomRange &&
+    global.userFilters[chatId] &&
+    global.userFilters[chatId].awaitingCustomRange &&
     msg.text &&
     !msg.text.startsWith('/')
   ) {
-    const filterKey = userFilters[chatId].awaitingCustomRange;
+    const filterKey = global.userFilters[chatId].awaitingCustomRange;
     const match = msg.text.match(/min\s*(\d+)\s*max\s*(\d+)/i);
     
     if (match) {
       const min = parseFloat(match[1]);
       const max = parseFloat(match[2]);
-      userFilters[chatId].filters[filterKey] = { min, max };
-      userFilters[chatId].awaitingCustomRange = null;
+      global.userFilters[chatId].filters[filterKey] = { min, max };
+      global.userFilters[chatId].awaitingCustomRange = null;
       
-      const filterButtons = getFilterButtons(userFilters[chatId].filters);
+      const filterButtons = getFilterButtons(global.userFilters[chatId].filters);
       const displayName = filterKey.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase());
       
       bot.sendMessage(chatId, 
@@ -965,7 +1216,7 @@ bot.onText(/\/saveword(?:\s*(.*))?/, (msg, match) => {
   
   if (!input) {
     bot.sendMessage(chatId, 
-      `💾 *Save Alert Words*\n\nAdd up to 5 words to get notified when matching tokens launch\\.\n\n*Example:*\n\`/saveword moon rocket pepe doge hope\`\n\n*Current saved words:* ${(userSavedWords[chatId] || []).length}/5`, 
+      `💾 *Save Alert Words*\n\nAdd up to 5 words to get notified when matching tokens launch\\.\n\n*Example:*\n\`/saveword moon rocket pepe doge hope\`\n\n*Current saved words:* ${(global.userSavedWords[chatId] || []).length}/5`, 
       { 
         parse_mode: 'MarkdownV2',
         reply_markup: {
@@ -997,7 +1248,8 @@ bot.onText(/\/saveword(?:\s*(.*))?/, (msg, match) => {
     return;
   }
   
-  userSavedWords[chatId] = inputWords;
+  global.userSavedWords[chatId] = inputWords;
+  debouncedSave(); // Save after modifying userSavedWords
   
   bot.sendMessage(chatId, 
     `✅ *Words Saved Successfully\\!*\n\n💾 *Your alert words:*\n${inputWords.map(w => `• \`${escapeMarkdownV2(w)}\``).join('\n')}\n\n🚨 You'll be notified when tokens matching these words launch\\!`, 
@@ -1015,7 +1267,7 @@ bot.onText(/\/saveword(?:\s*(.*))?/, (msg, match) => {
 
 bot.onText(/\/mysavedwords/, (msg) => {
   const chatId = msg.chat.id;
-  const words = userSavedWords[chatId];
+  const words = global.userSavedWords[chatId];
   
   if (words && words.length > 0) {
     bot.sendMessage(chatId, 
@@ -1051,7 +1303,7 @@ bot.onText(/\/mysavedwords/, (msg) => {
 
 bot.onText(/\/clearsavedwords/, (msg) => {
   const chatId = msg.chat.id;
-  const words = userSavedWords[chatId];
+  const words = global.userSavedWords[chatId];
   
   if (!words || words.length === 0) {
     bot.sendMessage(chatId, 
@@ -1075,19 +1327,7 @@ bot.onText(/\/clearsavedwords/, (msg) => {
     );
 });
 
-// Enhanced token alert system
-async function fetchLatestTokens() {
-  try {
-    const response = await axios.get('https://api.dexscreener.com/latest/dex/tokens/trending', {
-      timeout: 10000
-    });
-    return response.data || [];
-  } catch (error) {
-    console.error('Error fetching latest tokens:', error.message);
-    return [];
-  }
-}
-
+// Optimize alert system
 async function checkForTokenAlerts() {
   console.log('🔍 Checking for new token alerts...');
   
@@ -1098,9 +1338,18 @@ async function checkForTokenAlerts() {
       return;
     }
 
+    // Cache token data
+    const tokenCache = new Map();
+    tokens.forEach(token => {
+      if (token.address) {
+        tokenCache.set(token.address, token);
+      }
+    });
+
     let alertsSent = 0;
+    const alertPromises = [];
     
-    for (const [userId, words] of Object.entries(userSavedWords)) {
+    for (const [userId, words] of Object.entries(global.userSavedWords)) {
       if (!words || words.length === 0) continue;
       
       for (const token of tokens) {
@@ -1114,42 +1363,48 @@ async function checkForTokenAlerts() {
         
         if (matchingWords.length > 0) {
           const notificationKey = `${userId}_${address}`;
-          if (notifiedTokens[notificationKey]) continue;
+          if (global.notifiedTokens[notificationKey]) continue;
           
-          notifiedTokens[notificationKey] = true;
+          global.notifiedTokens[notificationKey] = true;
           
           const alertMessage = `🚨 *NEW TOKEN ALERT\\!*\n\n💎 *${escapeMarkdownV2(token.name || 'Unknown')}* \\(${escapeMarkdownV2(token.symbol || 'N/A')}\\)\n\n🎯 *Matched words:* ${matchingWords.map(w => `\`${escapeMarkdownV2(w)}\``).join(', ')}\n\n📊 *Details:*\n• Price: ${escapeMarkdownV2(token.priceUsd || 'N/A')}\n• DEX: ${escapeMarkdownV2(token.dexId || 'N/A')}\n• Chain: ${escapeMarkdownV2(token.chainId || 'Unknown')}\n• CA: \`${escapeMarkdownV2(address || 'N/A')}\`\n\n⚡ *Quick Actions:*`;
           
           if (address && typeof address === 'string' && address.length > 0) {
-            await bot.sendMessage(userId, alertMessage, {
-              parse_mode: 'MarkdownV2',
-              reply_markup: { 
-                inline_keyboard: getTradingBotButtons(address, token.name, token.symbol)
-              }
-            });
+            alertPromises.push(
+              bot.sendMessage(userId, alertMessage, {
+                parse_mode: 'MarkdownV2',
+                reply_markup: { 
+                  inline_keyboard: getTradingBotButtons(address, token.name, token.symbol)
+                }
+              })
+            );
           } else {
-            await bot.sendMessage(userId, alertMessage, {
-              parse_mode: 'MarkdownV2',
-              reply_markup: {
-                inline_keyboard: [[
-                  { text: '🔍 Search Similar', callback_data: 'menu_search' }
-                ]]
-              }
-            });
+            alertPromises.push(
+              bot.sendMessage(userId, alertMessage, {
+                parse_mode: 'MarkdownV2',
+                reply_markup: {
+                  inline_keyboard: [[
+                    { text: '🔍 Search Similar', callback_data: 'menu_search' }
+                  ]]
+                }
+              })
+            );
           }
           
           alertsSent++;
           
-          if (!userFilters[userId]) userFilters[userId] = {};
-          userFilters[userId].alertsReceived = (userFilters[userId].alertsReceived || 0) + 1;
-          
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          if (!global.userFilters[userId]) global.userFilters[userId] = {};
+          global.userFilters[userId].alertsReceived = (global.userFilters[userId].alertsReceived || 0) + 1;
         }
       }
     }
     
+    // Send all alerts in parallel
+    await Promise.all(alertPromises);
+    
     if (alertsSent > 0) {
       console.log(`✅ Sent ${alertsSent} token alerts`);
+      debouncedSave(); // Save after sending alerts
     }
     
   } catch (error) {
