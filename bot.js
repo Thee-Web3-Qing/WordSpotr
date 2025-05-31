@@ -465,7 +465,7 @@ bot.onText(/\/checktoken(?:\s+([\s\S]+))?/, async (msg, match) => {
     await sendTokenPage(chatId, cachedResults, 1, input);
     return;
   }
-
+  
   if (!input) {
     bot.sendMessage(chatId, 
       `🔍 *Token Search*\n\nPlease add your search phrase after the command\\.\n\n*Example:*\n\`/checktoken nothing will be forgiven\`\n\`/checktoken moon rocket doge\``, 
@@ -1372,21 +1372,21 @@ async function checkForTokenAlerts() {
           if (address && typeof address === 'string' && address.length > 0) {
             alertPromises.push(
               bot.sendMessage(userId, alertMessage, {
-                parse_mode: 'MarkdownV2',
-                reply_markup: { 
-                  inline_keyboard: getTradingBotButtons(address, token.name, token.symbol)
-                }
+              parse_mode: 'MarkdownV2',
+              reply_markup: { 
+                inline_keyboard: getTradingBotButtons(address, token.name, token.symbol)
+              }
               })
             );
           } else {
             alertPromises.push(
               bot.sendMessage(userId, alertMessage, {
-                parse_mode: 'MarkdownV2',
-                reply_markup: {
-                  inline_keyboard: [[
-                    { text: '🔍 Search Similar', callback_data: 'menu_search' }
-                  ]]
-                }
+              parse_mode: 'MarkdownV2',
+              reply_markup: {
+                inline_keyboard: [[
+                  { text: '🔍 Search Similar', callback_data: 'menu_search' }
+                ]]
+              }
               })
             );
           }
